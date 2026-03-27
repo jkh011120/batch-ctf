@@ -581,10 +581,11 @@ For each challenge_dir in sorted_challenges:
 ```
 
 **Parallelism rules:**
-- Launch ALL agents simultaneously — do not wait for one to finish before starting another
+- **Default max parallel agents: 5** — do not exceed 5 simultaneous agents unless `--jobs N` specifies otherwise
 - Each agent works independently in its own challenge directory
-- Use `run_in_background: true` for all agents except the last batch if there are many
-- If there are more than 10 challenges, batch them in groups of 10
+- Use `run_in_background: true` for all agents except the last batch
+- If there are more than 5 challenges (or N if `--jobs N`), batch them in groups of 5 (or N) — wait for the current batch to finish before launching the next
+- This limit prevents memory exhaustion from heavy tools (Ghidra, angr, Docker) running in parallel
 
 ### Phase 3.5: Retry Loop (on failure)
 
