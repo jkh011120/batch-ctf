@@ -75,6 +75,14 @@ For each challenge, determine its category and prepare the environment.
 - Medium challenges next (score 3)
 - Hard challenges last (score 4-5) — allocate more agent resources and retries
 
+**Isolation rules for parallel agents:**
+- Every agent MUST use the **challenge directory name** as a unique prefix for all shared resources
+- Docker image tag: `batch_ctf_<challenge_name>` (not generic names like `chall_name`)
+- Docker container name: `batch_ctf_<challenge_name>_tmp` (not `tmp_chall`)
+- Ghidra project directory: `/tmp/ghidra_<challenge_name>_$$` (use PID `$$` for extra uniqueness)
+- Temp files: always write inside the challenge directory or use `/tmp/<challenge_name>_*`
+- This prevents file system and Docker name collisions when agents run in parallel
+
 **Category-specific pre-processing:**
 
 #### PWN challenges
@@ -82,17 +90,23 @@ For each challenge, determine its category and prepare the environment.
 - Identify architecture: `file ./binary` and `readelf -h ./binary`
 - If `Dockerfile` or `docker-compose.yml` exists:
   ```bash
+  # IMPORTANT: Use challenge-specific names to avoid collisions with parallel agents
+  CHALL_NAME=$(basename $(pwd))
+  DOCKER_TAG="batch_ctf_${CHALL_NAME}"
+  DOCKER_CONTAINER="batch_ctf_${CHALL_NAME}_tmp"
+
   # Build and extract libc/ld from container
-  docker build -t chall_name .
-  docker create --name tmp_chall chall_name
+  docker build -t "$DOCKER_TAG" .
+  docker create --name "$DOCKER_CONTAINER" "$DOCKER_TAG"
   # Try multiple libc paths (varies by distro)
   for libpath in /lib/x86_64-linux-gnu /usr/lib/x86_64-linux-gnu /lib /usr/lib; do
-    docker cp tmp_chall:$libpath/libc.so.6 ./libc.so.6 2>/dev/null && break
+    docker cp "$DOCKER_CONTAINER":$libpath/libc.so.6 ./libc.so.6 2>/dev/null && break
   done
   for ldpath in /lib/x86_64-linux-gnu /lib64 /lib; do
-    docker cp tmp_chall:$ldpath/ld-linux-x86-64.so.2 ./ld-linux-x86-64.so.2 2>/dev/null && break
+    docker cp "$DOCKER_CONTAINER":$ldpath/ld-linux-x86-64.so.2 ./ld-linux-x86-64.so.2 2>/dev/null && break
   done
-  docker rm tmp_chall
+  docker rm "$DOCKER_CONTAINER"
+  docker rmi "$DOCKER_TAG" 2>/dev/null  # cleanup image to save disk
   # Patch binary with correct libc/ld
   patchelf --set-interpreter ./ld-linux-x86-64.so.2 --set-rpath . ./binary_name
   ```
@@ -115,13 +129,15 @@ Use the best available decompilation tool in this priority order:
 
 **Option B: Ghidra Headless (good quality, free)**
 ```bash
-# Create Ghidra project and run analysis + decompilation
+# IMPORTANT: Use challenge-specific project dir to avoid collisions with parallel agents
 GHIDRA_HOME=${GHIDRA_HOME:-/opt/ghidra}
-PROJECT_DIR=$(mktemp -d)
+CHALL_NAME=$(basename $(pwd))
+PROJECT_DIR="/tmp/ghidra_${CHALL_NAME}_$$"
+mkdir -p "$PROJECT_DIR"
 BINARY=$(readlink -f ./binary_name)
 
 # Run headless analysis with decompilation
-$GHIDRA_HOME/support/analyzeHeadless $PROJECT_DIR ghidra_proj \
+$GHIDRA_HOME/support/analyzeHeadless "$PROJECT_DIR" "proj_${CHALL_NAME}" \
   -import "$BINARY" \
   -postScript DecompileAllFunctions.java \
   -postScript ExportFunctionSignatures.java \
@@ -130,10 +146,13 @@ $GHIDRA_HOME/support/analyzeHeadless $PROJECT_DIR ghidra_proj \
   2>&1 | tee ghidra_analysis.log
 
 # If custom decompile script not available, use built-in export
-$GHIDRA_HOME/support/analyzeHeadless $PROJECT_DIR ghidra_proj \
+$GHIDRA_HOME/support/analyzeHeadless "$PROJECT_DIR" "proj_${CHALL_NAME}" \
   -import "$BINARY" \
-  -postScript ExportCCode.java /tmp/decompiled.c \
+  -postScript ExportCCode.java ./decompiled_${CHALL_NAME}.c \
   -deleteProject
+
+# Cleanup temp project dir
+rm -rf "$PROJECT_DIR"
 ```
 
 **Option C: objdump + strings (fallback)**
@@ -284,16 +303,21 @@ After decompilation (any method):
 
    **Ghidra Headless for Reverse:**
    ```bash
+   # IMPORTANT: Use challenge-specific paths to avoid collisions with parallel agents
    GHIDRA_HOME=${GHIDRA_HOME:-/opt/ghidra}
-   PROJECT_DIR=$(mktemp -d)
+   CHALL_NAME=$(basename $(pwd))
+   PROJECT_DIR="/tmp/ghidra_${CHALL_NAME}_$$"
+   mkdir -p "$PROJECT_DIR"
 
    # Full analysis with all analyzers enabled
-   $GHIDRA_HOME/support/analyzeHeadless $PROJECT_DIR rev_proj \
+   $GHIDRA_HOME/support/analyzeHeadless "$PROJECT_DIR" "rev_${CHALL_NAME}" \
      -import ./binary \
      -postScript DecompileAllFunctions.java \
      -postScript FindCryptoConstants.java \
      -deleteProject \
      2>&1 | tee ghidra_output.log
+
+   rm -rf "$PROJECT_DIR"
    ```
 
    **IDA Pro MCP for Reverse:**
