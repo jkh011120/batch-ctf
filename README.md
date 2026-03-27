@@ -21,14 +21,17 @@ Phase 2: Classification & Pre-processing
   └─ Auto-detect category (pwn/web/crypto/reverse/forensics/misc)
   └─ Estimate difficulty (1-5) → sort by easiest first
   └─ Category-specific setup (checksec, docker libc extract, etc.)
+  └─ Agent isolation: unique Docker/Ghidra names per challenge
 
 Phase 3: Parallel Execution
   └─ Spawn one Agent per challenge (all in parallel)
   └─ Each agent applies category-specific solving techniques
+  └─ Agents are fully isolated — no shared temp files or container names
 
 Phase 3.5: Retry Loop (on failure)
   └─ Analyze failure → rotate strategy → retry (max 3 attempts)
   └─ Re-classify category if needed (e.g. reverse → pwn)
+  └─ GDB automated debug loop for PWN (max 5 iterations)
 
 Phase 4: Writeup Generation
   └─ Each challenge gets a writeup.md (solved or unsolved)
@@ -42,12 +45,12 @@ Phase 5: Final Report
 | Category | What It Does |
 |----------|-------------|
 | **PWN** | checksec → decompile (IDA Pro MCP / Ghidra headless) → bug hunting → exploit plan → exploit development → GDB debug loop (max 5 iterations) |
-| **Reverse** | Decompile → anti-analysis bypass → fake flag detection → Z3 constraint solving. Supports Go, Rust, .NET, Python bytecode, Java, APK (Flutter/Blutter), WASM |
-| **Web (whitebox)** | Read all source → map attack surface → CVE search in dependencies → vulnerability chain exploitation |
-| **Web (blackbox)** | Fingerprint → directory fuzzing (ffuf/gobuster) → .git leak check → systematic vuln testing (SQLi, SSTI, SSRF, XSS, etc.) |
-| **Crypto** | Identify cryptosystem → apply known attacks (Coppersmith, Wiener, padding oracle, MT19937, lattice/LLL, etc.) → SageMath integration |
-| **Forensics** | Volatility 3 for memory dumps, tshark for PCAPs, steganography tools (exiftool, binwalk, steghide, zsteg), disk image recovery (mmls, fls, icat) |
-| **Misc** | Python jail escapes, encoding puzzles, QR codes, DNS exploitation, esoteric languages, Z3 constraint solving |
+| **Reverse** | Decompile → anti-analysis bypass (packing/anti-debug detection) → fake flag detection → Z3 constraint solving → dynamic analysis (strace/ltrace). Supports Go, Rust, .NET, Python bytecode, Java, APK (Flutter/Blutter), WASM |
+| **Web (whitebox)** | Read all source → map attack surface → CVE search in dependencies → vulnerability chain exploitation (SSTI, SQLi, SSRF, deserialization, prototype pollution, JWT, etc.) |
+| **Web (blackbox)** | Fingerprint → directory fuzzing (ffuf/gobuster) → .git leak check → systematic vuln testing (SQLi, SSTI, SSRF, XSS, command injection, etc.) |
+| **Crypto** | Identify cryptosystem → apply known attacks (RSA: Coppersmith/Wiener/Hastad, AES: padding oracle/bit-flip, ECC, PRNG: MT19937, lattice/LLL, etc.) → SageMath via Docker |
+| **Forensics** | Volatility 3 for memory dumps, tshark for PCAPs (HTTP objects, DNS exfil detection), steganography (exiftool, binwalk, steghide, zsteg), disk forensics (sleuthkit: mmls/fls/icat) |
+| **Misc** | Python/bash jail escapes, encoding puzzles, QR codes (zbar), DNS exploitation (zone transfer), esoteric languages, Z3 constraint solving |
 
 ### Decompilation Priority
 
@@ -56,6 +59,15 @@ For PWN and Reverse challenges, the best available decompiler is used automatica
 1. **IDA Pro MCP** (best) — via `/binary-analyze` skill pipeline
 2. **Ghidra Headless** (good) — automated headless analysis + decompilation
 3. **objdump + strings** (fallback) — manual disassembly
+
+### Parallel Agent Isolation
+
+When solving multiple challenges simultaneously, each agent uses unique names to prevent collisions:
+
+- Docker images: `batch_ctf_<challenge_name>`
+- Docker containers: `batch_ctf_<challenge_name>_tmp`
+- Ghidra projects: `/tmp/ghidra_<challenge_name>_<PID>`
+- Temp files: scoped to each challenge directory
 
 ### Output Structure
 
@@ -77,12 +89,43 @@ After execution, your directory will look like:
 
 ## Installation
 
+### 1. Install the skill
+
 ```bash
 # In your project directory:
 mkdir -p .claude/skills
 git clone https://github.com/jkh011120/batch-ctf.git /tmp/batch-ctf
 cp -r /tmp/batch-ctf/.claude/skills/batch-ctf .claude/skills/
 rm -rf /tmp/batch-ctf
+```
+
+### 2. Install system dependencies
+
+A setup script is provided to install all required tools:
+
+```bash
+wget -O /tmp/setup.sh https://raw.githubusercontent.com/jkh011120/batch-ctf/main/setup.sh
+bash /tmp/setup.sh
+```
+
+Or install manually — see [System Tools](#system-tools) below.
+
+### 3. SageMath (for crypto challenges)
+
+SageMath is used via Docker (no native install needed):
+
+```bash
+docker pull sagemath/sagemath
+```
+
+The skill automatically calls it as:
+
+```bash
+# Run sage code
+docker run --rm -v $(pwd):/work -w /work sagemath/sagemath sage -c "print(factor(2^256-1))"
+
+# Run sage script
+docker run --rm -v $(pwd):/work -w /work sagemath/sagemath sage solve.sage
 ```
 
 ## Usage
@@ -124,21 +167,26 @@ Without the category-specific skills, batch-ctf will still attempt to solve chal
 
 ### System Tools
 
-| Tool | Used For |
-|------|----------|
-| Python 3 + pwntools | PWN exploit development |
-| Ghidra (headless) | Binary decompilation |
-| checksec | Binary protection analysis |
-| one_gadget | ROP gadget finding |
-| patchelf | Binary patching with correct libc |
-| Docker | Extracting libc from challenge containers |
-| ffuf / gobuster | Web directory fuzzing |
-| tshark | PCAP analysis |
-| Volatility 3 | Memory forensics |
-| SageMath | Crypto challenges |
-| Z3 (Python) | Constraint solving |
-| binwalk, steghide, zsteg | Steganography |
-| GDB + pwndbg/gef | Exploit debugging |
+| Tool | Used For | Install |
+|------|----------|---------|
+| Python 3 + pwntools | PWN exploit development | `pip install pwntools` |
+| Ghidra (headless) | Binary decompilation | [setup script](#2-install-system-dependencies) |
+| GDB + pwndbg | Exploit debugging | `apt install gdb` + [pwndbg](https://github.com/pwndbg/pwndbg) |
+| checksec | Binary protection analysis | `apt install checksec` |
+| one_gadget | ROP gadget finding | `gem install one_gadget` |
+| patchelf | Binary patching with correct libc | `apt install patchelf` |
+| Docker | Libc extraction, SageMath | `apt install docker.io` |
+| ffuf | Web directory fuzzing | [ffuf releases](https://github.com/ffuf/ffuf/releases) |
+| tshark | PCAP analysis | `apt install tshark` |
+| Volatility 3 | Memory forensics | `pip install volatility3` |
+| SageMath | Crypto challenges | `docker pull sagemath/sagemath` |
+| Z3 | Constraint solving | `pip install z3-solver` |
+| binwalk | Firmware/stego extraction | `apt install binwalk` |
+| steghide / zsteg | Steganography | `apt install steghide` / `gem install zsteg` |
+| exiftool | Metadata analysis | `apt install libimage-exiftool-perl` |
+| sleuthkit | Disk forensics | `apt install sleuthkit` |
+| ROPgadget | ROP chain building | `pip install ROPgadget` |
+| angr | Symbolic execution | `pip install angr` |
 
 Not all tools are required — the skill uses whatever is available and falls back gracefully.
 
