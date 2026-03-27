@@ -11,7 +11,13 @@ Claude Code skill that scans the current directory for CTF challenge folders and
 
 ## Installation
 
-Copy `.claude/skills/batch-ctf/` into your project's `.claude/skills/` directory.
+```bash
+# 사용할 프로젝트 디렉토리에서:
+mkdir -p .claude/skills
+git clone https://github.com/jkh011120/batch-ctf.git /tmp/batch-ctf
+cp -r /tmp/batch-ctf/.claude/skills/batch-ctf .claude/skills/
+rm -rf /tmp/batch-ctf
+```
 
 ## Dependencies
 
